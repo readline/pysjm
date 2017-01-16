@@ -1,0 +1,208 @@
+#!/usr/bin/env python
+# =============================================================================
+# Filename: pysjm
+# Version: 1.1
+# Author: Kai Yu - finno@live.cn
+# https://github.com/readline
+# Last modified: 2017-01-16 15:17
+# Description: 
+# 
+# =============================================================================
+import os,sys
+import time
+import subprocess
+import xml.dom.minidom as xdm
+
+def time_stamp():
+    return '[%s]'%time.strftime('%Y-%m-%d %A %X %Z',time.localtime(time.time()))
+
+class Tasks(object):
+    def __init__(self, taskFile, taskDir):
+        
+        self.taskDir = os.path.abspath(taskDir)
+        self.taskFile = os.path.abspath(taskFile)
+        self.pid = os.getpid()
+        self.jobidList = []
+        self.jobDic = {}
+        self.jobXmlDic = {}
+        self.pendingList = []
+        self.submited = {}
+        self.finished = {}
+        self.xmlfinished = {}
+        self.failed = {}
+
+        os.system('mkdir -p %s'%os.path.join(taskDir, 'bash'))
+        os.system('mkdir -p %s'%os.path.join(taskDir, 'log'))
+        os.system('cp %s %s/'%(self.taskFile, self.taskDir))
+        self.taskFile = os.path.join(self.taskDir, self.taskFile.split('/')[-1])
+        try:
+            dom = xdm.parse(self.taskFile)
+        except:
+            sys.exit('XML parser failed!')
+
+        root = dom.documentElement
+        jobs = root.getElementsByTagName('Job')
+
+        self.env = root.getElementsByTagName('Env')[0].firstChild.data
+        try:
+            finished = root.getElementsByTagName('Finished')[0].firstChild.data
+            for jobid in [i.strip() for i in finished.split(',')]:
+                self.xmlfinished[jobid] = True
+        except:
+            pass
+        
+        for jobNode in jobs:
+            job = {}
+            for attrib in ['jobid', 'queue', 'memory', 'cpu', 'io', 'proj', 'dir', 'cmd', 'after']:
+                job[attrib] = None
+                try:
+                    job[attrib] = jobNode.getElementsByTagName(attrib)[0].firstChild.data
+                except:
+                    pass
+            with open(os.path.join(self.taskDir, 'bash', '%s.sh'%job['jobid']), 'w') as savefile:
+                savefile.write('source %s\nhostname\n'%self.env)
+                for line in job['cmd'].strip().split('\n'):
+                    savefile.write(line.strip() + ' &&\n')
+                savefile.write('echo "[Finish] %d [Finish]"'%self.pid)
+                if job['dir']:
+                    os.system('mkdir -p %s'%job['dir'])
+            self.jobidList.append(job['jobid'])
+            self.pendingList.append(job['jobid'])
+            self.jobDic[job['jobid']] = job
+            self.jobXmlDic[job['jobid']] = jobNode
+
+    def submit(self, jobid):
+        queue = self.jobDic[jobid]['queue']
+        memory = self.jobDic[jobid]['memory']
+        cpu = self.jobDic[jobid]['cpu']
+        cmd = 'qsub -q %s -cwd -V'%self.jobDic[jobid]['queue']
+        if self.jobDic[jobid]['proj']:
+            cmd += ' -P %s'%self.jobDic[jobid]['proj']
+        cmd += ' -l vf=%sG'%self.jobDic[jobid]['memory']
+        if self.jobDic[jobid]['cpu']:
+            cmd += ',p=%s'%self.jobDic[jobid]['cpu']
+        if self.jobDic[jobid]['io']:
+            cmd += ',io=%s'%self.jobDic[jobid]['io']
+        #cmd += ' %s'%os.path.join(self.taskDir, 'bash', '%s.sh'%jobid)
+        cmd += ' %s'%os.path.abspath('%s'%os.path.join(self.taskDir, 'bash', '%s.sh'%jobid))
+        os.chdir(os.path.join(self.taskDir, 'log'))
+        while 1:
+            jobCount = len(os.popen('qstat').readlines())
+            if jobCount <= 352:
+                break
+            else:
+                time.sleep(3)
+        tmp = os.popen(cmd)
+        sgeid = tmp.readline().split()[2]
+        self.submited[jobid] = sgeid
+        os.chdir(self.taskDir)
+        return sgeid
+
+    def check_job(self, jobid):
+        sgeid = self.submited[jobid]
+        qstat = subprocess.Popen('qstat -j %s'%sgeid, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout
+        qstat = qstat.readline().strip()
+        if qstat == 'Following jobs do not exist:':
+            with open(os.path.join(self.taskDir, 'log', '%s.sh.o%s'%(jobid, sgeid))) as infile:
+                if '[Finish] %d [Finish]'%self.pid in infile.read():
+                    return True
+                else:
+                    return 'Fail'
+        else:
+            return False
+
+    def write_failed(self, savepath):
+        failedList = self.failed.keys() + self.pendingList
+        savefile = open(savepath, 'w')
+        savefile.write('<Task>\n<Env>%s</Env>\n<Finished>%s</Finished>\n'%(self.env, ','.join(self.finished.keys()+self.xmlfinished.keys())))
+        for jobid in failedList:
+            self.jobXmlDic[jobid].writexml(savefile,addindent='    ')
+            savefile.write('\n')
+        savefile.write('</Task>')
+        savefile.close()
+
+    def write_status(self, savepath):
+        savelog = open(savepath, 'w')
+        for jobid in sorted(self.failed.keys()):
+            savelog.write('[Failed!!]\t%s\n'%jobid)
+        for jobid in sorted(self.pendingList):
+            savelog.write('[Pending!]\t%s\n'%jobid)
+        for jobid in sorted(self.finished.keys()):
+            savelog.write('[Finished]\t%s\n'%jobid)
+        savelog.close()
+
+
+    def run(self):
+        while 1:
+            time.sleep(1)
+            if len(self.pendingList) == 0 and len(self.finished) == self.jobidList:
+                self.write_status('%s.run.status'%self.taskFile)
+                print '%s Finished this run! Pipeline have done.'%time_stamp()
+                break
+            for jobid in self.pendingList:
+                after = self.jobDic[jobid]['after']
+                if after == None:
+                    sgeid = self.submit(jobid)
+                    print '%s Submit: %s'%(time_stamp(), jobid)
+                    self.pendingList.remove(jobid)
+                    self.submited[jobid] = sgeid
+                else:
+                    after = [i.strip() for i in after.split(',')]
+                    afterfinish = 0
+                    for a in after:
+                        if a in self.finished or self.xmlfinished:
+                            afterfinish += 1
+                    if afterfinish == len(after):
+                        sgeid = self.submit(jobid)
+                        print '%s Submit: %s'%(time_stamp(), jobid)
+                        self.pendingList.remove(jobid)
+                        self.submited[jobid] = sgeid
+
+            if len(self.pendingList) >= 0 and len(self.submited) == 0 and len(self.jobidList) != len(self.finished):
+                self.write_status('%s.run.status'%self.taskFile)
+                self.write_failed('%s.run.job'%self.taskFile)
+                print '%s Finished this run! Pipeline have failures.'%time_stamp()
+                break
+            if len(self.pendingList) >= 0 and len(self.submited) == 0 and len(self.jobidList) == len(self.finished):
+                self.write_status('%s.run.status'%self.taskFile)
+                print '%s Finished this run! Pipeline have done.'%time_stamp()
+                break
+
+
+            submitedList = self.submited.keys()
+            for jobid in submitedList:
+                jobstatus = self.check_job(jobid)
+                if jobstatus == True:
+                    print '%s Finish: %s'%(time_stamp(), jobid)
+                    del self.submited[jobid]
+                    self.finished[jobid] = True
+                elif jobstatus == 'Fail':
+                    print '%s Fail: %s'%(time_stamp(), jobid)
+                    del self.submited[jobid]
+                    self.failed[jobid] = True
+                else:
+                    pass
+
+        return self.failed.keys(), self.pendingList, self.finished.keys(), '%s.run.job'%self.taskFile 
+
+def main():
+    try:
+        taskFile = sys.argv[1]
+    except:
+        sys.exit(sys.argv[0] + ' [task file path]')
+    run = 0
+    taskFile = os.path.abspath(taskFile)
+    taskDir = '/'.join(taskFile.split('/')[:-1]) + '/Tasks'
+    print taskDir
+    
+    tasks = Tasks(taskFile, taskDir)
+    failed, pending, finished, jobpath = tasks.run()
+    while len(failed) + len(pending) > 0 and run < 3:
+        run += 1
+        print '%s Pipeline run %d...'%(time_stamp(), run)
+        tasks = Tasks(jobpath, taskDir)
+        failed, pending, finished, jobpath = tasks.run()
+
+if __name__ == '__main__':
+    main()
+
