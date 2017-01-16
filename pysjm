@@ -88,10 +88,13 @@ class Tasks(object):
         os.chdir(os.path.join(self.taskDir, 'log'))
         while 1:
             jobCount = len(os.popen('qstat').readlines())
-            if jobCount <= 352:
+            if jobCount <= 202:
+                break
+            elif jobCount > 202 and jobCount < 352:
+                time.sleep(1)
                 break
             else:
-                time.sleep(3)
+                time.sleep(5)
         tmp = os.popen(cmd)
         sgeid = tmp.readline().split()[2]
         self.submited[jobid] = sgeid
