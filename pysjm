@@ -35,10 +35,11 @@ class Tasks(object):
         os.system('mkdir -p %s'%os.path.join(taskDir, 'log'))
         os.system('cp %s %s/'%(self.taskFile, self.taskDir))
         self.taskFile = os.path.join(self.taskDir, self.taskFile.split('/')[-1])
-        try:
-            dom = xdm.parse(self.taskFile)
-        except:
-            sys.exit('XML parser failed!')
+        dom = xdm.parse(self.taskFile)
+        #try:
+            #dom = xdm.parse(self.taskFile)
+        #except:
+        #    sys.exit('XML parser failed!')
 
         root = dom.documentElement
         jobs = root.getElementsByTagName('Job')
@@ -61,11 +62,12 @@ class Tasks(object):
                     pass
             with open(os.path.join(self.taskDir, 'bash', '%s.sh'%job['jobid']), 'w') as savefile:
                 savefile.write('source %s\nhostname\n'%self.env)
+                if job['dir']:
+                    os.system('mkdir -p %s'%job['dir'])
+                    savefile.write('cd %s\n'%job['dir'])
                 for line in job['cmd'].strip().split('\n'):
                     savefile.write(line.strip() + ' &&\n')
                 savefile.write('echo "[Finish] %d [Finish]"'%self.pid)
-                if job['dir']:
-                    os.system('mkdir -p %s'%job['dir'])
             self.jobidList.append(job['jobid'])
             self.pendingList.append(job['jobid'])
             self.jobDic[job['jobid']] = job
