@@ -60,6 +60,8 @@ class Tasks(object):
                     job[attrib] = jobNode.getElementsByTagName(attrib)[0].firstChild.data
                 except:
                     pass
+            if job['jobid'] in self.xmlfinished:
+                continue
             with open(os.path.join(self.taskDir, 'bash', '%s.sh'%job['jobid']), 'w') as savefile:
                 savefile.write('source %s\nhostname\n'%self.env)
                 if job['dir']:
@@ -107,7 +109,7 @@ class Tasks(object):
         sgeid = self.submited[jobid]
         qstat = subprocess.Popen('qstat -j %s'%sgeid, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout
         qstat = qstat.readline().strip()
-        if qstat == 'Following jobs do not exist:':
+        if qstat == 'Following jobs do not exist:' and os.path.exists(os.path.join(self.taskDir, 'log', '%s.sh.o%s'%(jobid, sgeid))):
             with open(os.path.join(self.taskDir, 'log', '%s.sh.o%s'%(jobid, sgeid))) as infile:
                 if '[Finish] %d [Finish]'%self.pid in infile.read():
                     return True
@@ -155,7 +157,9 @@ class Tasks(object):
                     after = [i.strip() for i in after.split(',')]
                     afterfinish = 0
                     for a in after:
-                        if a in self.finished or self.xmlfinished:
+                        if a in self.finished:
+                            afterfinish += 1
+                        elif a in self.xmlfinished:
                             afterfinish += 1
                     if afterfinish == len(after):
                         sgeid = self.submit(jobid)
