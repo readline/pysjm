@@ -94,7 +94,7 @@ class Tasks(object):
             jobCount = len(os.popen('qstat').readlines())
             if jobCount <= 202:
                 break
-            elif jobCount > 202 and jobCount < 352:
+            elif jobCount > 202 and jobCount < 280:
                 time.sleep(1)
                 break
             else:
